@@ -1,10 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -12,8 +12,8 @@ import (
 // Task ...
 type Task struct {
 	ID           string   `json:"id"`
-	Description  string   `json:"description"`
-	Note         string   `json:"note"`
+	Description  string   `json:"description,omitempty"`
+	Note         string   `json:"note,omitempty"`
 	Applications []string `json:"applications"`
 }
 
@@ -43,13 +43,15 @@ var tasks = map[string]Task{
 
 // Ниже напишите обработчики для каждого эндпоинта
 func getTasks(w http.ResponseWriter, r *http.Request) {
-	// сериализуем данные из слайса artists
-	resp, err := json.Marshal(tasks)
+	var taskErray []Task
+	for _, task := range tasks {
+		taskErray = append(taskErray, task)
+	}
+	resp, err := json.Marshal(taskErray)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 	// в заголовок записываем тип контента, у нас это данные в формате JSON
 	w.Header().Set("Content-Type", "application/json")
 	// так как все успешно, то статус OK
@@ -57,31 +59,62 @@ func getTasks(w http.ResponseWriter, r *http.Request) {
 	// записываем сериализованные в JSON данные в тело ответа
 	w.Write(resp)
 }
-func postTasks(w http.ResponseWriter, r *http.Request) {
+func getUnusedIDs() []string {
+	const maxID = 5
+	unusedIDs := make([]string, 0, maxID)
+	for i := 1; i <= maxID; i++ {
+		id := fmt.Sprintf("%d", i)
+		if _, exists := tasks[id]; !exists {
+			unusedIDs = append(unusedIDs, id)
+		}
+	}
+	return unusedIDs
+}
+func addTasks(w http.ResponseWriter, r *http.Request) {
 	var task Task
-	var buf bytes.Buffer
 
-	_, err := buf.ReadFrom(r.Body)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err = json.Unmarshal(buf.Bytes(), &task); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	//добавил чек по id, но костылем c привязкой к строгому эндП
+	/* id := chi.URLParam(r, "id")
+	   task, ok := tasks[id]
+	   if ok {
+	   	http.Error(w, "Уже есть такая задача", http.StatusAlreadyReported)
+	   	return
+	   } */
+	getUnusedIDs()
+	if _, idExist := tasks[task.ID]; idExist {
+		alreadyExId := make([]string, 0, len(tasks))
+		for id := range tasks {
+			alreadyExId = append(alreadyExId, id)
+		}
+		errMsg := fmt.Sprintf("Задача с id %s уже есть.", task.ID)
+		unusedIDs := getUnusedIDs()
+		if len(unusedIDs) > 0 {
+			errMsg += " Но можно заюзать эти: " + strings.Join(unusedIDs, ", ")
+		}
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
+	}
+	//проверка на пустой аплик
+	if len(task.Applications) == 0 {
+		task.Applications = append(task.Applications, r.UserAgent())
 	}
 	tasks[task.ID] = task
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+
 }
 func getTasksID(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	artist, ok := tasks[id]
+	task, ok := tasks[id]
 	if !ok {
 		http.Error(w, "Такой задачи нет", http.StatusNoContent)
 		return
 	}
-	resp, err := json.Marshal(artist)
+	resp, err := json.Marshal(task)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -98,19 +131,21 @@ func deleteTasksID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delete(tasks, id)
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(http.StatusOK)
 }
 
 func main() {
 	r := chi.NewRouter()
 	// здесь регистрируйте ваши обработчики
 	r.Get("/tasks", getTasks)
-	r.Post("/tasks", postTasks)
+	//r.Post("/tasks/{id}", addTasks) костыль
+	r.Post("/tasks", addTasks)
 	r.Get("/tasks/{id}", getTasksID)
 	r.Delete("/tasks/{id}", deleteTasksID)
 
 	if err := http.ListenAndServe(":8080", r); err != nil {
-		fmt.Printf("Неправильно. ПОПРОБУЙТЕ ЕЩЕ..РАЗ: %s", err.Error())
+		//http.Handle("/redirect", http.RedirectHandler("https://yandex.ru/video/preview/4828233716525781863", http.StatusMultiStatus))
+		fmt.Printf("Неправильно. Попробуйте еще раз: %s", err.Error())
 		return
 	}
 }
